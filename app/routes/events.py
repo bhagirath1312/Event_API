@@ -1,53 +1,26 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app import models, schemas, database
-from typing import List
-
+from app.routes.users import get_current_user
+from ..schemas import EventCreate
+from ..models import Event
+from ..database import get_db
 router = APIRouter(tags=["Events"])
 
-
-@router.post("/", response_model=schemas.UserCreate )
-def create_event(event_data: schemas.UserCreate, db: Session = Depends(database.get_db)):
-    new_event = models.Event(**event_data.dict())
-    db.add(new_event)
-    db.commit()
-    db.refresh(new_event)
-    return new_event
-
-
-@router.get("/", response_model=List[schemas.UserCreate])
-def get_events(db: Session = Depends(database.get_db)):
-    return db.query(models.Event).all()
-
-
-@router.get("/{event_id}", response_model=schemas.UserCreate)
-def get_event(event_id: int, db: Session = Depends(database.get_db)):
-    event = db.query(models.Event).filter(models.Event.id == event_id).first()
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
-    return event
-
-
-@router.put("/{event_id}", response_model=schemas.UserCreate)
-def update_event(event_id: int, event_data: schemas.UserCreate, db: Session = Depends(database.get_db)):
-    event = db.query(models.Event).filter(models.Event.id == event_id).first()
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
-
-    for key, value in event_data.dict().items():
-        setattr(event, key, value)
-
+@router.post("/events/")
+def create_event(event_data: EventCreate, db: Session = Depends(get_db)):
+    event = Event(
+        title=event_data.title,
+        description=event_data.description,
+        event_date=event_data.event_date,  # ✅ Use event_date
+        location=event_data.location,
+        max_capacity=event_data.max_capacity,
+        registration_deadline=event_data.registration_deadline,
+        category=event_data.category,
+        status=event_data.status,
+        user_id=1  # Replace with actual user ID
+    )
+    db.add(event)
     db.commit()
     db.refresh(event)
     return event
-
-
-@router.delete("/{event_id}")
-def delete_event(event_id: int, db: Session = Depends(database.get_db)):
-    event = db.query(models.Event).filter(models.Event.id == event_id).first()
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
-
-    db.delete(event)
-    db.commit()
-    return {"message": "Event deleted successfully"}
