@@ -1,9 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app import models, schemas, database
-
+from app.auth import get_current_user
+from app.database import get_db
+from app.models import Registration
 router = APIRouter(tags=["Registrations"])
 
+@router.get("/events/{event_id}/is-registered")
+def check_registration_status(event_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """
+    Check if the logged-in user is registered for a specific event.
+    """
+    registration = db.query(Registration).filter(
+        Registration.event_id == event_id,
+        Registration.user_id == user.id
+    ).first()
+
+    if registration:
+        return {"event_id": event_id, "user_id": user.id, "registered": True, "status": registration.status}
+    else:
+        return {"event_id": event_id, "user_id": user.id, "registered": False}
 
 @router.post("/{event_id}/register")
 def register_for_event(event_id: int, user_id: int, db: Session = Depends(database.get_db)):

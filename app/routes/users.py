@@ -91,10 +91,12 @@ from fastapi import Depends, HTTPException, status, APIRouter
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
+from sqlalchemy import Column, Integer, String, DateTime, func
 from app import database, models, schemas
+from app.database import get_db
 from app.utils.security import verify_password, hash_password
 from app.config import settings
-
+from app.database import get_db
 router = APIRouter(tags=["Users"])
 
 # OAuth2 authentication setup
@@ -111,7 +113,9 @@ def register_user(user_data: schemas.UserCreate, db: Session = Depends(database.
     hashed_password = hash_password(user_data.password)
     new_user = models.User(
         email=user_data.email,
-        password_hash=hashed_password,
+        full_name=user_data.full_name,  # ✅ Ensure this is being assigned
+        password_hash=hash_password(user_data.password),
+        role=Column(String, default="attendee", server_default="attendee", nullable=False)
     )
     db.add(new_user)
     db.commit()
@@ -159,7 +163,34 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
 
 
-@router.get("/me", response_model=schemas.UserResponse)
-def get_me(current_user: models.User = Depends(get_current_user)):
-    """Returns the details of the currently logged-in user."""
-    return schemas.UserResponse(id=current_user.id, email=current_user.email)
+# @router.get("/me", response_model=schemas.UserResponse)
+# def get_me(current_user: models.User = Depends(get_current_user)):
+#     """Returns the details of the currently logged-in user."""
+#     return schemas.UserResponse(id=current_user.id, email=current_user.email)
+
+@router.get("/me")
+def get_me(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+    }
+
+
+@router.put("/me/update-role")
+def update_user_role(new_role: str, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if new_role not in ["attendee", "organizer"]:
+        raise HTTPException(status_code=400, detail="Invalid role. Choose 'attendee' or 'organizer'.")
+
+    user.role = new_role
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": f"Role updated successfully to {user.role}",
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role
+    }
