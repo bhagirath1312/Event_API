@@ -1,34 +1,80 @@
 from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from jose import jwt, JWTError
-from passlib.context import CryptContext
-from fastapi.security import OAuth2PasswordBearer
-from fastapi import Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app import models, schemas, database
+from app.utils.security import verify_password, hash_password, SECRET_KEY, ALGORITHM
 from app.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/users/login")
+router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
-def hash_password(password: str):
-    return pwd_context.hash(password)
+@router.post("/register", response_model=schemas.UserResponse)
+def register_user(user_data: schemas.UserCreate, db: Session = Depends(database.get_db)):
+    """Register a new user with hashed password."""
+    existing_user = db.query(models.User).filter(models.User.email == user_data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    hashed_password = hash_password(user_data.password)
+    new_user = models.User(
+        email=user_data.email,
+        full_name=user_data.full_name,
+        password_hash=hashed_password,
+        role=user_data.role or "attendee"
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
 
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+@router.post("/login", response_model=schemas.Token)
+def login_user(user_data: schemas.LoginRequest, db: Session = Depends(database.get_db)):
+    """Authenticate user and return JWT token."""
+    user = db.query(models.User).filter(models.User.email == user_data.email).first()
+    if not user or not verify_password(user_data.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-def decode_access_token(token: str):
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.utcnow() + access_token_expires
+    access_token = jwt.encode({"sub": user.email, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+
+    return {"access_token": access_token, "token_type": "bearer", "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES}
+
+
+def get_current_user(db: Session = Depends(database.get_db), authorization: str = Header(None)):
+    """Authenticate user using JWT token from the Authorization header."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise credentials_exception
+
+    token = authorization.split(" ")[1]
+
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload.get("sub")
-    except JWTError:
-        return None
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        if not email:
+            raise credentials_exception
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    email = decode_access_token(token)
-    if email is None:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    return {"email": email}
+        user = db.query(models.User).filter(models.User.email == email).first()
+        if not user:
+            raise credentials_exception
+
+        return user
+    except JWTError:
+        raise credentials_exception
+
+@router.get("/me", response_model=schemas.UserResponse)
+def get_me(user: models.User = Depends(get_current_user)):
+    """Returns the details of the currently logged-in user."""
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role
+    }
