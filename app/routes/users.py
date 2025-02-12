@@ -2,7 +2,7 @@ from datetime import timedelta, datetime
 from fastapi import Depends, HTTPException, status, APIRouter
 from jose import jwt
 from sqlalchemy.orm import Session
-from app import models, schemas
+from app import models, schemas, database
 from app.auth import get_current_user
 from app.database import get_db
 from app.utils.security import verify_password, hash_password, SECRET_KEY, ALGORITHM
@@ -10,7 +10,8 @@ from app.config import settings
 
 router = APIRouter(tags=["Users"])
 @router.post("/register", response_model=schemas.UserResponse)
-def register_user(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
+def register_user(user_data: schemas.UserCreate, db: Session = Depends(database.get_db)):
+    """Register a new user with hashed password."""
     existing_user = db.query(models.User).filter(models.User.email == user_data.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -26,7 +27,6 @@ def register_user(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
     return new_user
-
 @router.post("/login")
 def login_user(user_data: schemas.LoginRequest, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == user_data.email).first()
